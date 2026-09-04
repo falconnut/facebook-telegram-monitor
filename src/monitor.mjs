@@ -8,6 +8,7 @@ const STATE_PATH = process.env.STATE_PATH || "data/state.json";
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const DRY_RUN = process.env.DRY_RUN === "1";
+const TEST_NOTIFICATION = process.env.TEST_NOTIFICATION === "1";
 const MAX_SEEN = 200;
 
 function normalizeSpace(value) {
@@ -133,10 +134,7 @@ async function collectPosts() {
   }
 }
 
-async function sendTelegram(post) {
-  const prefix = post.timeText ? `โพสต์ใหม่ (${post.timeText})` : "โพสต์ใหม่";
-  const message = `${prefix}\n\n${post.text}\n\n${post.url}`.slice(0, 4_096);
-
+async function sendTelegramMessage(message) {
   if (DRY_RUN) {
     console.log(`[dry-run] ${message}`);
     return;
@@ -153,7 +151,7 @@ async function sendTelegram(post) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         chat_id: TELEGRAM_CHAT_ID,
-        text: message,
+        text: message.slice(0, 4_096),
         disable_web_page_preview: false,
       }),
     },
@@ -165,12 +163,25 @@ async function sendTelegram(post) {
   }
 }
 
+async function sendTelegram(post) {
+  const prefix = post.timeText ? `โพสต์ใหม่ (${post.timeText})` : "โพสต์ใหม่";
+  await sendTelegramMessage(`${prefix}\n\n${post.text}\n\n${post.url}`);
+}
+
 async function main() {
   const state = await loadState();
   const posts = await collectPosts();
 
   if (posts.length === 0) {
     throw new Error("No Facebook posts with permanent links were found");
+  }
+
+  if (TEST_NOTIFICATION) {
+    await sendTelegramMessage(
+      `✅ ทดสอบระบบสำเร็จ\n\nตรวจสอบเพจ Golfclub by benz ได้ตามปกติ\nพบโพสต์ล่าสุด ${posts.length} โพสต์\n\n${posts[0].url}`,
+    );
+    console.log("Test notification sent to Telegram.");
+    return;
   }
 
   if (state.seen.length === 0) {

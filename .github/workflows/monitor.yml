@@ -5,6 +5,12 @@ on:
     - cron: "*/30 * * * *"
       timezone: "Asia/Bangkok"
   workflow_dispatch:
+    inputs:
+      send_test:
+        description: Send a Telegram test notification
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -41,6 +47,7 @@ jobs:
           FB_PAGE_URL: https://www.facebook.com/people/Golfclub-by-benz/100083124501694/
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TEST_NOTIFICATION: ${{ inputs.send_test == true && '1' || '0' }}
         run: npm run monitor
 
       - name: Save monitoring state
