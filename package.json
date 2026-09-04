@@ -1,0 +1,13 @@
+{
+  "name": "facebook-telegram-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/monitor.mjs",
+    "monitor": "node src/monitor.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+}
