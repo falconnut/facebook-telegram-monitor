@@ -63,7 +63,7 @@ async function saveState(state) {
   await writeFile(STATE_PATH, `${JSON.stringify(output, null, 2)}\n`, "utf8");
 }
 
-async function collectPosts() {
+async function collectPosts(debugPath = "debug-facebook.png") {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     locale: "th-TH",
@@ -125,13 +125,41 @@ async function collectPosts() {
       }
     }
 
-    return [...unique.values()];
+    const posts = [...unique.values()];
+    if (posts.length === 0) {
+      await page.screenshot({ path: debugPath, fullPage: true }).catch(() => {});
+    }
+    return posts;
   } catch (error) {
-    await page.screenshot({ path: "debug-facebook.png", fullPage: true }).catch(() => {});
+    await page.screenshot({ path: debugPath, fullPage: true }).catch(() => {});
     throw error;
   } finally {
     await browser.close();
   }
+}
+
+async function collectPostsWithRetry(maxAttempts = 3) {
+  let lastError = new Error("No Facebook posts with permanent links were found");
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const posts = await collectPosts(`debug-facebook-attempt-${attempt}.png`);
+      if (posts.length > 0) {
+        if (attempt > 1) console.log(`Facebook recovered on attempt ${attempt}.`);
+        return posts;
+      }
+      lastError = new Error("No Facebook posts with permanent links were found");
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+
+    console.warn(`Facebook attempt ${attempt}/${maxAttempts} failed: ${lastError.message}`);
+    if (attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 8_000));
+    }
+  }
+
+  throw lastError;
 }
 
 async function sendTelegramMessage(message) {
@@ -170,11 +198,7 @@ async function sendTelegram(post) {
 
 async function main() {
   const state = await loadState();
-  const posts = await collectPosts();
-
-  if (posts.length === 0) {
-    throw new Error("No Facebook posts with permanent links were found");
-  }
+  const posts = await collectPostsWithRetry();
 
   if (TEST_NOTIFICATION) {
     await sendTelegramMessage(
