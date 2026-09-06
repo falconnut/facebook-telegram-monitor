@@ -1,6 +1,6 @@
 # Facebook → Telegram Monitor (ใช้ฟรีบน GitHub Actions)
 
-โปรเจกต์นี้ตั้งเวลาให้ตรวจโพสต์ใหม่จากเพจ **Golfclub by benz** ทุก 5 นาที แล้วส่งโพสต์ใหม่เข้า Telegram ผ่านบอทของคุณ โดยไม่ต้องเปิด Mac ค้างไว้
+โปรเจกต์นี้ตรวจโพสต์ใหม่จากเพจ **Golfclub by benz** แล้วส่งโพสต์ใหม่เข้า Telegram ผ่านบอทของคุณ โดยไม่ต้องเปิด Mac ค้างไว้ ปัจจุบัน Cloudflare Worker ชื่อ `facebook-telegram-monitor-trigger` เป็นตัวเรียก GitHub Actions ทุก 5 นาที เพื่อหลีกเลี่ยงความล่าช้าของ GitHub Scheduled Actions
 
 > Facebook อาจเปลี่ยนหน้าเว็บหรือบล็อกระบบอัตโนมัติได้ในอนาคต จึงควรตรวจหน้า Actions เป็นครั้งคราว หากงานล้มเหลว ระบบจะเก็บภาพ `facebook-debug` ไว้ช่วยวิเคราะห์ 3 วัน
 
@@ -37,7 +37,14 @@
 4. ครั้งแรกจะสร้างข้อมูลตั้งต้นและจะ **ไม่ส่งโพสต์เก่าย้อนหลัง**
 5. เปิดผลการทำงานและตรวจว่าขึ้น `Baseline created ...`
 
-หลังจากนั้นระบบจะพยายามตรวจทุก 5 นาที เมื่อพบโพสต์ใหม่จึงส่ง Telegram ทั้งนี้ GitHub อาจหน่วงหรือข้าม Scheduled run บางรอบได้
+หลังจากนั้น Cloudflare จะเรียก workflow ทุก 5 นาที เมื่อพบโพสต์ใหม่จึงส่ง Telegram
+
+## ตัวตั้งเวลาบน Cloudflare
+
+- Worker: `facebook-telegram-monitor-trigger`
+- Cron trigger: ทุก 5 นาที
+- Secret: `GITHUB_TOKEN` เป็น fine-grained token ที่เข้าถึงเฉพาะ repository นี้ และมีสิทธิ์ Actions แบบ read/write
+- GitHub workflow ใช้ `workflow_dispatch` เท่านั้น เพื่อไม่ให้ตัวตั้งเวลาเดิมทำงานซ้อนกับ Cloudflare
 
 ## 5. ปิดงานเดิมบน Mac
 

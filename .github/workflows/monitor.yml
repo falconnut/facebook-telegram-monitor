@@ -1,9 +1,6 @@
 name: Monitor Facebook and notify Telegram
 
 on:
-  schedule:
-    - cron: "4/5 * * * *"
-      timezone: "Asia/Bangkok"
   workflow_dispatch:
     inputs:
       send_test:
