@@ -5,9 +5,9 @@ import path from "node:path";
 const PAGE_URL = process.env.FB_PAGE_URL
   || "https://www.facebook.com/people/Golfclub-by-benz/100083124501694/";
 const PAGE_URLS = [
+  PAGE_URL,
   "https://www.facebook.com/profile.php?id=100083124501694&sk=posts",
   `${PAGE_URL.replace(/\/$/, "")}/posts/`,
-  PAGE_URL,
 ];
 const STATE_PATH = process.env.STATE_PATH || "data/state.json";
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -77,6 +77,7 @@ async function collectPosts(pageUrl, debugPath = "debug-facebook.png") {
   const context = await browser.newContext({
     locale: "th-TH",
     timezoneId: "Asia/Bangkok",
+    viewport: { width: 1_280, height: 2_000 },
   });
   const page = await context.newPage();
 
@@ -86,15 +87,16 @@ async function collectPosts(pageUrl, debugPath = "debug-facebook.png") {
       timeout: 60_000,
     });
 
-    const closeButton = page.getByRole("button", { name: "Close", exact: true });
+    await page.keyboard.press("Escape").catch(() => {});
+    const closeButton = page.getByRole("button", { name: /^(Close|ปิด)$/ }).first();
     if (await closeButton.isVisible().catch(() => false)) {
       await closeButton.click().catch(() => {});
     }
 
-    await page.waitForTimeout(2_000);
-    for (let index = 0; index < 2; index += 1) {
-      await page.mouse.wheel(0, 1_500);
-      await page.waitForTimeout(1_000);
+    await page.waitForTimeout(1_500);
+    for (let index = 0; index < 5; index += 1) {
+      await page.mouse.wheel(0, 1_200);
+      await page.waitForTimeout(500);
     }
 
     const articles = await page.locator('[role="article"]').evaluateAll((nodes) => (
