@@ -4,9 +4,15 @@ import path from "node:path";
 
 const PAGE_URL = process.env.FB_PAGE_URL
   || "https://www.facebook.com/people/Golfclub-by-benz/100083124501694/";
+const PAGE_URLS = [
+  "https://www.facebook.com/profile.php?id=100083124501694&sk=posts",
+  `${PAGE_URL.replace(/\/$/, "")}/posts/`,
+  PAGE_URL,
+];
 const STATE_PATH = process.env.STATE_PATH || "data/state.json";
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const BROWSER_CHANNEL = process.env.BROWSER_CHANNEL;
 const DRY_RUN = process.env.DRY_RUN === "1";
 const TEST_NOTIFICATION = process.env.TEST_NOTIFICATION === "1";
 const MAX_SEEN = 200;
@@ -63,18 +69,19 @@ async function saveState(state) {
   await writeFile(STATE_PATH, `${JSON.stringify(output, null, 2)}\n`, "utf8");
 }
 
-async function collectPosts(debugPath = "debug-facebook.png") {
-  const browser = await chromium.launch({ headless: true });
+async function collectPosts(pageUrl, debugPath = "debug-facebook.png") {
+  const browser = await chromium.launch({
+    headless: true,
+    ...(BROWSER_CHANNEL ? { channel: BROWSER_CHANNEL } : {}),
+  });
   const context = await browser.newContext({
     locale: "th-TH",
     timezoneId: "Asia/Bangkok",
-    userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-      + "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   });
   const page = await context.newPage();
 
   try {
-    await page.goto(PAGE_URL, {
+    await page.goto(pageUrl, {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
@@ -142,8 +149,9 @@ async function collectPostsWithRetry(maxAttempts = 3) {
   let lastError = new Error("No Facebook posts with permanent links were found");
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const pageUrl = PAGE_URLS[(attempt - 1) % PAGE_URLS.length];
     try {
-      const posts = await collectPosts(`debug-facebook-attempt-${attempt}.png`);
+      const posts = await collectPosts(pageUrl, `debug-facebook-attempt-${attempt}.png`);
       if (posts.length > 0) {
         if (attempt > 1) console.log(`Facebook recovered on attempt ${attempt}.`);
         return posts;
@@ -153,7 +161,9 @@ async function collectPostsWithRetry(maxAttempts = 3) {
       lastError = error instanceof Error ? error : new Error(String(error));
     }
 
-    console.warn(`Facebook attempt ${attempt}/${maxAttempts} failed: ${lastError.message}`);
+    console.warn(
+      `Facebook attempt ${attempt}/${maxAttempts} failed (${pageUrl}): ${lastError.message}`,
+    );
     if (attempt < maxAttempts) {
       await new Promise((resolve) => setTimeout(resolve, 8_000));
     }
@@ -217,6 +227,11 @@ async function main() {
   const seen = new Set(state.seen);
   const newPosts = posts.filter((post) => !seen.has(post.id)).reverse();
 
+  if (newPosts.length === 0) {
+    console.log("No new posts.");
+    return;
+  }
+
   for (const post of newPosts) {
     await sendTelegram(post);
     seen.add(post.id);
@@ -224,7 +239,7 @@ async function main() {
   }
 
   await saveState({ seen: [...newPosts.map((post) => post.id), ...state.seen] });
-  console.log(newPosts.length === 0 ? "No new posts." : `Sent ${newPosts.length} new posts.`);
+  console.log(`Sent ${newPosts.length} new posts.`);
 }
 
 main().catch((error) => {

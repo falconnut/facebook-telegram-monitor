@@ -2,7 +2,7 @@ name: Monitor Facebook and notify Telegram
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "4/5 * * * *"
       timezone: "Asia/Bangkok"
   workflow_dispatch:
     inputs:
@@ -39,12 +39,10 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
       - name: Check for new posts
         env:
           FB_PAGE_URL: https://www.facebook.com/people/Golfclub-by-benz/100083124501694/
+          BROWSER_CHANNEL: chrome
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TEST_NOTIFICATION: ${{ inputs.send_test == true && '1' || '0' }}
