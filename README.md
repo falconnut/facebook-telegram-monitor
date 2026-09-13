@@ -46,6 +46,13 @@
 - Secret: `GITHUB_TOKEN` เป็น fine-grained token ที่เข้าถึงเฉพาะ repository นี้ และมีสิทธิ์ Actions แบบ read/write
 - GitHub workflow ใช้ `workflow_dispatch` เท่านั้น เพื่อไม่ให้ตัวตั้งเวลาเดิมทำงานซ้อนกับ Cloudflare
 
+## ระบบป้องกันงานค้าง
+
+- รอบตรวจโพสต์ใช้ `cancel-in-progress: true` เพื่อให้รอบใหม่ปลดรอบเดิมที่ค้าง
+- แต่ละรอบมีเวลาทำงานสูงสุด 4 นาที
+- Workflow `Recover stalled Facebook monitor` ตรวจทุก 10 นาที และยกเลิกรอบตรวจโพสต์ที่ค้างเกิน 8 นาที
+- Watchdog แยก concurrency ออกจากตัวมอนิเตอร์ จึงยังทำงานได้แม้คิวของตัวมอนิเตอร์ถูกล็อก
+
 ## 5. ปิดงานเดิมบน Mac
 
 เมื่องาน GitHub ทดสอบผ่านแล้ว ให้หยุดงาน Codex เดิมชื่อ **ติดตามทุกโพสต์ Golfclub by benz** เพื่อป้องกันข้อความซ้ำ
