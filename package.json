@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/monitor.mjs",
+    "check": "node --check src/monitor.mjs && node --test",
     "monitor": "node src/monitor.mjs"
   },
   "dependencies": {

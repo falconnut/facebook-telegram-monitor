@@ -45,6 +45,7 @@ jobs:
           BROWSER_CHANNEL: chrome
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MAX_POST_AGE_HOURS: 12
           TEST_NOTIFICATION: ${{ inputs.send_test == true && '1' || '0' }}
         run: npm run monitor
 

@@ -1,6 +1,7 @@
 import { chromium } from "playwright";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isFreshPost } from "./recency.mjs";
 
 const PAGE_URL = process.env.FB_PAGE_URL
   || "https://www.facebook.com/people/Golfclub-by-benz/100083124501694/";
@@ -16,6 +17,10 @@ const BROWSER_CHANNEL = process.env.BROWSER_CHANNEL;
 const DRY_RUN = process.env.DRY_RUN === "1";
 const TEST_NOTIFICATION = process.env.TEST_NOTIFICATION === "1";
 const MAX_SEEN = 200;
+const configuredMaxAge = Number(process.env.MAX_POST_AGE_HOURS || 12);
+const MAX_POST_AGE_HOURS = Number.isFinite(configuredMaxAge) && configuredMaxAge > 0
+  ? configuredMaxAge
+  : 12;
 
 function normalizeSpace(value) {
   return value.replace(/\s+/g, " ").trim();
@@ -112,8 +117,19 @@ async function collectPosts(pageUrl, debugPath = "debug-facebook.png") {
 
         if (!permalink) return null;
         const text = article.innerText || article.textContent || "";
-        const timeText = permalink.textContent?.trim() || "";
-        return { href: permalink.href, text, timeText };
+        const timeNode = permalink.querySelector("abbr") || permalink;
+        const timeText = timeNode.getAttribute("aria-label")
+          || permalink.getAttribute("aria-label")
+          || timeNode.getAttribute("title")
+          || timeNode.textContent?.trim()
+          || "";
+        const unixSeconds = Number(
+          timeNode.getAttribute("data-utime") || permalink.getAttribute("data-utime"),
+        );
+        const publishedAtMs = Number.isFinite(unixSeconds) && unixSeconds > 0
+          ? unixSeconds * 1_000
+          : null;
+        return { href: permalink.href, text, timeText, publishedAtMs };
       }).filter(Boolean)
     ));
 
@@ -129,6 +145,7 @@ async function collectPosts(pageUrl, debugPath = "debug-facebook.png") {
           id,
           url,
           timeText: normalizeSpace(article.timeText),
+          publishedAtMs: article.publishedAtMs,
           text: text.slice(0, 2_500),
         });
       }
@@ -227,11 +244,18 @@ async function main() {
   }
 
   const seen = new Set(state.seen);
-  const newPosts = posts.filter((post) => !seen.has(post.id)).reverse();
+  const unseenPosts = posts.filter((post) => !seen.has(post.id)).reverse();
 
-  if (newPosts.length === 0) {
+  if (unseenPosts.length === 0) {
     console.log("No new posts.");
     return;
+  }
+
+  const newPosts = unseenPosts.filter((post) => isFreshPost(post, MAX_POST_AGE_HOURS));
+  const stalePosts = unseenPosts.filter((post) => !isFreshPost(post, MAX_POST_AGE_HOURS));
+
+  for (const post of stalePosts) {
+    console.log(`Skipped old or undated post ${post.id} (${post.timeText || "unknown time"}).`);
   }
 
   for (const post of newPosts) {
@@ -240,8 +264,8 @@ async function main() {
     console.log(`Sent post ${post.id}`);
   }
 
-  await saveState({ seen: [...newPosts.map((post) => post.id), ...state.seen] });
-  console.log(`Sent ${newPosts.length} new posts.`);
+  await saveState({ seen: [...unseenPosts.map((post) => post.id), ...state.seen] });
+  console.log(`Sent ${newPosts.length} new posts; skipped ${stalePosts.length} old or undated posts.`);
 }
 
 main().catch((error) => {

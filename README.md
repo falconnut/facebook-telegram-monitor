@@ -39,6 +39,12 @@
 
 หลังจากนั้น Cloudflare จะเรียก workflow ทุก 5 นาที เมื่อพบโพสต์ใหม่จึงส่ง Telegram
 
+## การป้องกันโพสต์เก่าแจ้งซ้ำ
+
+- แจ้ง Telegram เฉพาะโพสต์ที่ Facebook ระบุว่ามีอายุไม่เกิน 12 ชั่วโมง
+- โพสต์เก่าหรือโพสต์ที่อ่านเวลาไม่ได้จะถูกบันทึกว่าเคยเห็นแล้วโดยไม่ส่งแจ้งเตือน
+- ปรับช่วงเวลาได้ด้วยตัวแปร `MAX_POST_AGE_HOURS` ใน `.github/workflows/monitor.yml`
+
 ## ตัวตั้งเวลาบน Cloudflare
 
 - Worker: `facebook-telegram-monitor-trigger`
