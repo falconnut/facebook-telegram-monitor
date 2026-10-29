@@ -23,7 +23,7 @@ export function postAgeHours(post, nowMs = Date.now()) {
   return null;
 }
 
-export function isFreshPost(post, maxAgeHours = 12, nowMs = Date.now()) {
+export function isFreshPost(post, maxAgeHours = 24, nowMs = Date.now()) {
   const ageHours = postAgeHours(post, nowMs);
   return ageHours !== null && ageHours <= maxAgeHours;
 }

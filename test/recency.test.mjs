@@ -14,6 +14,12 @@ test("rejects old relative times", () => {
   assert.equal(isFreshPost({ timeText: "เมื่อวานนี้" }, 12), false);
 });
 
+test("accepts delayed posts up to 24 hours but still rejects two-day-old posts", () => {
+  assert.equal(isFreshPost({ timeText: "20 ชั่วโมง" }, 24), true);
+  assert.equal(isFreshPost({ timeText: "24 ชม." }, 24), true);
+  assert.equal(isFreshPost({ timeText: "2 วันที่แล้ว" }, 24), false);
+});
+
 test("rejects missing or unknown dates instead of risking an old alert", () => {
   assert.equal(isFreshPost({ timeText: "" }, 12), false);
   assert.equal(isFreshPost({ timeText: "27 ก.ย." }, 12), false);

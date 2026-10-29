@@ -2,6 +2,7 @@ import { chromium } from "playwright";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isFreshPost } from "./recency.mjs";
+import { allPostIds, mergePosts, postWasSeen } from "./post-identity.mjs";
 
 const PAGE_URL = process.env.FB_PAGE_URL
   || "https://www.facebook.com/people/Golfclub-by-benz/100083124501694/";
@@ -16,11 +17,11 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const BROWSER_CHANNEL = process.env.BROWSER_CHANNEL;
 const DRY_RUN = process.env.DRY_RUN === "1";
 const TEST_NOTIFICATION = process.env.TEST_NOTIFICATION === "1";
-const MAX_SEEN = 200;
-const configuredMaxAge = Number(process.env.MAX_POST_AGE_HOURS || 12);
+const MAX_SEEN = 5_000;
+const configuredMaxAge = Number(process.env.MAX_POST_AGE_HOURS || 24);
 const MAX_POST_AGE_HOURS = Number.isFinite(configuredMaxAge) && configuredMaxAge > 0
   ? configuredMaxAge
-  : 12;
+  : 24;
 
 function normalizeSpace(value) {
   return value.replace(/\s+/g, " ").trim();
@@ -89,7 +90,7 @@ async function collectPosts(pageUrl, debugPath = "debug-facebook.png") {
   try {
     await page.goto(pageUrl, {
       waitUntil: "domcontentloaded",
-      timeout: 60_000,
+      timeout: 30_000,
     });
 
     await page.keyboard.press("Escape").catch(() => {});
@@ -99,7 +100,7 @@ async function collectPosts(pageUrl, debugPath = "debug-facebook.png") {
     }
 
     await page.waitForTimeout(1_500);
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 8; index += 1) {
       await page.mouse.wheel(0, 1_200);
       await page.waitForTimeout(500);
     }
@@ -129,20 +130,27 @@ async function collectPosts(pageUrl, debugPath = "debug-facebook.png") {
         const publishedAtMs = Number.isFinite(unixSeconds) && unixSeconds > 0
           ? unixSeconds * 1_000
           : null;
-        return { href: permalink.href, text, timeText, publishedAtMs };
+        const canonicalId = anchors.map((anchor) => anchor.getAttribute("href") || "")
+          .map((href) => href.match(/[?&]set=pcb\.(\d+)/)?.[1]
+            || href.match(/\/(?:posts|videos)\/(\d+)/)?.[1])
+          .find(Boolean);
+        return { href: permalink.href, text, timeText, publishedAtMs, canonicalId };
       }).filter(Boolean)
     ));
 
     const unique = new Map();
     for (const article of articles) {
       const url = normalizePostUrl(article.href);
-      const id = postIdFromUrl(url);
+      const urlId = postIdFromUrl(url);
+      const ids = [...new Set([article.canonicalId, urlId].filter(Boolean))];
+      const id = ids[0];
       const text = normalizeSpace(article.text)
         .replace(/\b(?:Like|Comment|Send message|See more)\b/gi, "")
         .trim();
       if (!unique.has(id) && text) {
         unique.set(id, {
           id,
+          ids,
           url,
           timeText: normalizeSpace(article.timeText),
           publishedAtMs: article.publishedAtMs,
@@ -164,31 +172,50 @@ async function collectPosts(pageUrl, debugPath = "debug-facebook.png") {
   }
 }
 
-async function collectPostsWithRetry(maxAttempts = 3) {
+async function collectPostsWithRetry(maxAttemptsPerUrl = 2) {
   let lastError = new Error("No Facebook posts with permanent links were found");
+  const collected = [];
+  let pending = PAGE_URLS.map((pageUrl, index) => ({ pageUrl, index }));
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const pageUrl = PAGE_URLS[(attempt - 1) % PAGE_URLS.length];
-    try {
-      const posts = await collectPosts(pageUrl, `debug-facebook-attempt-${attempt}.png`);
-      if (posts.length > 0) {
-        if (attempt > 1) console.log(`Facebook recovered on attempt ${attempt}.`);
-        return posts;
+  for (let attempt = 1; attempt <= maxAttemptsPerUrl && pending.length > 0; attempt += 1) {
+    const retry = [];
+    for (const source of pending) {
+      try {
+        const posts = await collectPosts(
+          source.pageUrl,
+          `debug-facebook-source-${source.index + 1}-attempt-${attempt}.png`,
+        );
+        if (posts.length > 0) {
+          collected.push(...posts);
+          console.log(
+            `Facebook source ${source.index + 1}/${PAGE_URLS.length} returned ${posts.length} posts${attempt > 1 ? ` on attempt ${attempt}` : ""}.`,
+          );
+          continue;
+        }
+        lastError = new Error("No Facebook posts with permanent links were found");
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
       }
-      lastError = new Error("No Facebook posts with permanent links were found");
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
+
+      retry.push(source);
+      console.warn(
+        `Facebook source ${source.index + 1}/${PAGE_URLS.length} attempt ${attempt}/${maxAttemptsPerUrl} failed (${source.pageUrl}): ${lastError.message}`,
+      );
     }
 
-    console.warn(
-      `Facebook attempt ${attempt}/${maxAttempts} failed (${pageUrl}): ${lastError.message}`,
-    );
-    if (attempt < maxAttempts) {
-      await new Promise((resolve) => setTimeout(resolve, 8_000));
+    pending = retry;
+    if (pending.length > 0 && attempt < maxAttemptsPerUrl) {
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
     }
   }
 
-  throw lastError;
+  if (collected.length === 0) throw lastError;
+
+  const posts = mergePosts(collected);
+  console.log(
+    `Collected ${posts.length} unique posts from ${PAGE_URLS.length - pending.length}/${PAGE_URLS.length} Facebook sources.`,
+  );
+  return posts;
 }
 
 async function sendTelegramMessage(message) {
@@ -238,16 +265,23 @@ async function main() {
   }
 
   if (state.seen.length === 0) {
-    await saveState({ seen: posts.map((post) => post.id) });
+    await saveState({ seen: allPostIds(posts) });
     console.log(`Baseline created with ${posts.length} posts; no alerts sent.`);
     return;
   }
 
   const seen = new Set(state.seen);
-  const unseenPosts = posts.filter((post) => !seen.has(post.id)).reverse();
+  const unseenPosts = posts.filter((post) => !postWasSeen(post, seen)).reverse();
+  const discoveredIds = allPostIds(posts);
+  const newAliases = discoveredIds.filter((id) => !seen.has(id));
 
   if (unseenPosts.length === 0) {
-    console.log("No new posts.");
+    if (newAliases.length > 0) {
+      await saveState({ seen: [...newAliases, ...state.seen] });
+      console.log(`No new posts; saved ${newAliases.length} additional post aliases.`);
+    } else {
+      console.log("No new posts.");
+    }
     return;
   }
 
@@ -264,7 +298,7 @@ async function main() {
     console.log(`Sent post ${post.id}`);
   }
 
-  await saveState({ seen: [...unseenPosts.map((post) => post.id), ...state.seen] });
+  await saveState({ seen: [...discoveredIds, ...state.seen] });
   console.log(`Sent ${newPosts.length} new posts; skipped ${stalePosts.length} old or undated posts.`);
 }
 
