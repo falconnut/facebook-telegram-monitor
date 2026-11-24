@@ -1,7 +1,7 @@
 import { chromium } from "playwright";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { isFreshPost } from "./recency.mjs";
+import { postAgeHours } from "./recency.mjs";
 import { allPostIds, mergePosts, postWasSeen } from "./post-identity.mjs";
 
 const PAGE_URL = process.env.FB_PAGE_URL
@@ -75,7 +75,7 @@ async function saveState(state) {
   await writeFile(STATE_PATH, `${JSON.stringify(output, null, 2)}\n`, "utf8");
 }
 
-async function collectPosts(pageUrl, debugPath = "debug-facebook.png") {
+async function collectPosts(pageUrl, debugPath, onPosts) {
   const browser = await chromium.launch({
     headless: true,
     ...(BROWSER_CHANNEL ? { channel: BROWSER_CHANNEL } : {}),
@@ -100,11 +100,33 @@ async function collectPosts(pageUrl, debugPath = "debug-facebook.png") {
     }
 
     await page.waitForTimeout(1_500);
+    const collected = [];
+    async function capture() {
+      const posts = await readVisiblePosts(page);
+      collected.push(...posts);
+      await onPosts(posts);
+    }
+    await capture();
     for (let index = 0; index < 8; index += 1) {
       await page.mouse.wheel(0, 1_200);
       await page.waitForTimeout(500);
+      await capture();
     }
 
+    const posts = mergePosts(collected);
+    if (posts.length === 0) {
+      await page.screenshot({ path: debugPath, fullPage: true }).catch(() => {});
+    }
+    return posts;
+  } catch (error) {
+    await page.screenshot({ path: debugPath, fullPage: true }).catch(() => {});
+    throw error;
+  } finally {
+    await browser.close();
+  }
+}
+
+async function readVisiblePosts(page) {
     const articles = await page.locator('[role="article"]').evaluateAll((nodes) => (
       nodes.map((article) => {
         const anchors = [...article.querySelectorAll("a[href]")];
@@ -159,20 +181,10 @@ async function collectPosts(pageUrl, debugPath = "debug-facebook.png") {
       }
     }
 
-    const posts = [...unique.values()];
-    if (posts.length === 0) {
-      await page.screenshot({ path: debugPath, fullPage: true }).catch(() => {});
-    }
-    return posts;
-  } catch (error) {
-    await page.screenshot({ path: debugPath, fullPage: true }).catch(() => {});
-    throw error;
-  } finally {
-    await browser.close();
-  }
+    return [...unique.values()];
 }
 
-async function collectPostsWithRetry(maxAttemptsPerUrl = 2) {
+async function collectPostsWithRetry(onPosts, maxAttemptsPerUrl = 2) {
   let lastError = new Error("No Facebook posts with permanent links were found");
   const collected = [];
   let pending = PAGE_URLS.map((pageUrl, index) => ({ pageUrl, index }));
@@ -184,6 +196,7 @@ async function collectPostsWithRetry(maxAttemptsPerUrl = 2) {
         const posts = await collectPosts(
           source.pageUrl,
           `debug-facebook-source-${source.index + 1}-attempt-${attempt}.png`,
+          onPosts,
         );
         if (posts.length > 0) {
           collected.push(...posts);
@@ -232,6 +245,7 @@ async function sendTelegramMessage(message) {
     `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
     {
       method: "POST",
+      signal: AbortSignal.timeout(10_000),
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         chat_id: TELEGRAM_CHAT_ID,
@@ -254,7 +268,36 @@ async function sendTelegram(post) {
 
 async function main() {
   const state = await loadState();
-  const posts = await collectPostsWithRetry();
+  const seen = new Set(state.seen);
+  const added = new Set();
+  const attempted = new Set();
+  let deliveryError;
+  const posts = await collectPostsWithRetry(async (batch) => {
+    if (TEST_NOTIFICATION || state.seen.length === 0) return;
+    for (const post of mergePosts(batch).reverse()) {
+      if (!postWasSeen(post, seen)) {
+        const age = postAgeHours(post);
+        if (age === null) continue;
+        if (age <= MAX_POST_AGE_HOURS) {
+          if (postWasSeen(post, attempted)) continue;
+          for (const id of post.ids) attempted.add(id);
+          try {
+            await sendTelegram(post);
+            console.log(`Sent post ${post.id}`);
+          } catch (error) {
+            deliveryError ??= error;
+            continue;
+          }
+        } else {
+          console.log(`Skipped old post ${post.id} (${post.timeText || "timestamp"}).`);
+        }
+      }
+      for (const id of post.ids) {
+        if (!seen.has(id)) added.add(id);
+        seen.add(id);
+      }
+    }
+  });
 
   if (TEST_NOTIFICATION) {
     await sendTelegramMessage(
@@ -270,36 +313,13 @@ async function main() {
     return;
   }
 
-  const seen = new Set(state.seen);
-  const unseenPosts = posts.filter((post) => !postWasSeen(post, seen)).reverse();
-  const discoveredIds = allPostIds(posts);
-  const newAliases = discoveredIds.filter((id) => !seen.has(id));
-
-  if (unseenPosts.length === 0) {
-    if (newAliases.length > 0) {
-      await saveState({ seen: [...newAliases, ...state.seen] });
-      console.log(`No new posts; saved ${newAliases.length} additional post aliases.`);
-    } else {
-      console.log("No new posts.");
+  if (added.size > 0) await saveState({ seen: [...added, ...state.seen] });
+  for (const post of posts) {
+    if (!postWasSeen(post, seen) && postAgeHours(post) === null) {
+      console.log(`Will retry post with unknown time: ${post.id}`);
     }
-    return;
   }
-
-  const newPosts = unseenPosts.filter((post) => isFreshPost(post, MAX_POST_AGE_HOURS));
-  const stalePosts = unseenPosts.filter((post) => !isFreshPost(post, MAX_POST_AGE_HOURS));
-
-  for (const post of stalePosts) {
-    console.log(`Skipped old or undated post ${post.id} (${post.timeText || "unknown time"}).`);
-  }
-
-  for (const post of newPosts) {
-    await sendTelegram(post);
-    seen.add(post.id);
-    console.log(`Sent post ${post.id}`);
-  }
-
-  await saveState({ seen: [...discoveredIds, ...state.seen] });
-  console.log(`Sent ${newPosts.length} new posts; skipped ${stalePosts.length} old or undated posts.`);
+  if (deliveryError) throw deliveryError;
 }
 
 main().catch((error) => {

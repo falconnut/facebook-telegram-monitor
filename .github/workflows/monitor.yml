@@ -50,7 +50,7 @@ jobs:
         run: npm run monitor
 
       - name: Save monitoring state
-        if: success()
+        if: ${{ !cancelled() }}
         run: |
           if git diff --quiet -- data/state.json; then
             exit 0
